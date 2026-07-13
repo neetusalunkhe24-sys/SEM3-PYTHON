@@ -1,0 +1,46 @@
+# 1. Create nested tuple with subjects
+subject1 = ("Database Management System", 401)
+subject2 = ("Machine Learning", 402)
+subject3 = ("Computer Graphics", 403)
+
+nested_tuple = (subject1, subject2, subject3)
+
+print("Nested Tuple:", nested_tuple)
+
+# 2. Indexing
+print("First subject tuple:", nested_tuple[0])
+print("Name of second subject:", nested_tuple[1][0])
+
+# 3. Negative indexing
+print("Last subject tuple (negative index):", nested_tuple[-1])
+print("Name of last subject:", nested_tuple[-1][0])
+
+# 4. Loop through the nested tuple
+print("\nAll Subjects:")
+
+for subject in nested_tuple:
+    print(f"Subject Name: {subject[0]}, Code: {subject[1]}")
+
+# 5. Reverse the tuple
+reversed_tuple = nested_tuple[::-1]
+
+print("\nReversed Tuple:", reversed_tuple)
+
+# 6. Slice the tuple (first two subjects)
+sliced_tuple = nested_tuple[0:2]
+
+print("Sliced Tuple (first two subjects):", sliced_tuple)
+
+# 7. Concatenate another subject tuple
+subject4 = ("Cloud Computing", 404)
+
+updated_tuple = nested_tuple + (subject4,)
+
+print("After Concatenation:", updated_tuple)
+
+# 8. Demonstrate immutability
+try:
+    nested_tuple[0][1] = 999   # Trying to change subject code
+
+except TypeError as e:
+    print("\nTuple Immutability Test: Error occurred ->", e)
