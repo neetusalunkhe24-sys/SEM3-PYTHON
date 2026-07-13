@@ -1,0 +1,21 @@
+# Program to Search a Word in a Text
+
+print("=== Word Search Program ===")
+print("Name: Neetu")
+print("Roll no.: S109\n")
+
+# Step 1: Get text from the user
+user_text = input("Enter the text: ")
+
+# Step 2: Get the word to search
+word = input("Enter the word to search: ")
+
+# Step 3: Display the entered text
+print("\nYou entered:")
+print(user_text)
+
+# Step 4: Search for the word (case-insensitive)
+if word.lower() in user_text.lower():
+    print(f"\nThe word '{word}' was found in the text.")
+else:
+    print(f"\nThe word '{word}' was NOT found in the text.")
