@@ -1,4 +1,4 @@
-#Grade Calculator
+#1g. Grade Calculator
 
 marks = int(input("Enter marks: "))
 
