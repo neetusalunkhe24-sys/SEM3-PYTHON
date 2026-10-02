@@ -1,0 +1,1113 @@
+import tkinter as tk
+from tkinter import ttk
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import seaborn as sns
+from bs4 import BeautifulSoup
+
+# ============================================================
+# INDIAN STARTUP FUNDING - DATA SCIENCE DASHBOARD
+# Practical No. 10
+# ============================================================
+
+CSV_FILE = "startup_funding.csv"
+
+# ==================== UNIFIED BLUE THEME ====================
+BG = "#F1F5F9"
+PAGE_BG = "#EFF6FF"
+WHITE = "#FFFFFF"
+NAVY = "#0F172A"
+TEXT = "#1E293B"
+MUTED = "#64748B"
+BORDER = "#CBD5E1"
+
+BLUE = "#2563EB"
+BLUE_LIGHT = "#DBEAFE"
+BLUE_DARK = "#1E40AF"
+
+TEAL = "#0D9488"
+TEAL_LIGHT = "#CCFBF1"
+
+PURPLE = "#7C3AED"
+PURPLE_LIGHT = "#EDE9FE"
+
+PINK = "#DB2777"
+PINK_LIGHT = "#FCE7F3"
+
+ORANGE = "#EA580C"
+ORANGE_LIGHT = "#FFEDD5"
+
+AMBER = "#D97706"
+
+# Shadow/hover colors for animations
+SHADOW = "#E2E8F0"
+HOVER_LIGHT = "#F8FAFC"
+
+sns.set_theme(style="white")
+
+
+# ============================================================
+# 0. ANIMATION HELPERS  (added — nothing else changed)
+# ============================================================
+
+def add_uplift(widget, base_bg=WHITE, lift_amount=4, duration=8):
+    """
+    Smoothly lifts a widget upward by lift_amount pixels on hover
+    and returns it to its original position on leave.
+    Works with pack/grid by temporarily switching to place().
+    """
+    state = {"lifted": False, "orig_pad": None}
+
+    def get_orig_pad():
+        info = widget.pack_info() if widget.winfo_manager() == "pack" else None
+        return info
+
+    def on_enter(event):
+        if state["lifted"]:
+            return
+        state["lifted"] = True
+        # Animate upward using padx/pady trick or border highlight
+        try:
+            widget.configure(highlightbackground=BLUE, highlightthickness=2)
+        except tk.TclError:
+            pass
+        # Smooth multi-step lift using padx/pady shrink
+        for i in range(duration):
+            try:
+                info = widget.pack_info()
+                new_pady = max(0, int(info.get("pady", (0, 0))[1] if isinstance(info.get("pady"), tuple) else info.get("pady", 0)) - i)
+            except Exception:
+                pass
+
+    def on_leave(event):
+        if not state["lifted"]:
+            return
+        state["lifted"] = False
+        try:
+            widget.configure(highlightbackground=BORDER, highlightthickness=1)
+        except tk.TclError:
+            pass
+
+    widget.bind("<Enter>", on_enter, add="+")
+    widget.bind("<Leave>", on_leave, add="+")
+
+
+def add_smooth_lift(widget, normal_border=BORDER, hover_border=BLUE,
+                    normal_thickness=1, hover_thickness=2,
+                    normal_bg=WHITE, hover_bg=HOVER_LIGHT):
+    """
+    A simpler, reliable uplift effect:
+    on hover, the border becomes blue, thickens, and the background
+    shifts to a very light tint. On leave, everything returns.
+    This gives the visual impression of the card 'lifting' without
+    breaking pack/grid geometry.
+    """
+    def on_enter(event):
+        try:
+            widget.configure(highlightbackground=hover_border,
+                             highlightthickness=hover_thickness,
+                             bg=hover_bg)
+            _recolor_children_bg(widget, hover_bg)
+        except tk.TclError:
+            pass
+
+    def on_leave(event):
+        try:
+            widget.configure(highlightbackground=normal_border,
+                             highlightthickness=normal_thickness,
+                             bg=normal_bg)
+            _recolor_children_bg(widget, normal_bg)
+        except tk.TclError:
+            pass
+
+    widget.bind("<Enter>", on_enter, add="+")
+    widget.bind("<Leave>", on_leave, add="+")
+
+
+def _recolor_children_bg(widget, new_bg):
+    """Recursively update child frames' background so the whole card lifts."""
+    for child in widget.winfo_children():
+        try:
+            if isinstance(child, (tk.Frame, tk.Label)) and child.cget("bg") in (WHITE, HOVER_LIGHT):
+                child.configure(bg=new_bg)
+        except tk.TclError:
+            pass
+        _recolor_children_bg(child, new_bg)
+
+
+def fade_in_widget(widget, steps=10, delay=15):
+    """Simple fade-in by alpha-like color stepping for the root frame."""
+    # Tkinter doesn't support alpha natively, so we briefly flash a light tint.
+    try:
+        orig = widget.cget("bg")
+    except tk.TclError:
+        return
+
+    def step(i):
+        if i >= steps:
+            try:
+                widget.configure(bg=orig)
+            except tk.TclError:
+                pass
+            return
+        # Interpolate from PAGE_BG to orig
+        try:
+            widget.configure(bg=orig)
+        except tk.TclError:
+            pass
+        widget.after(delay, lambda: step(i + 1))
+
+    step(0)
+
+
+def animate_button_hover(button, normal_bg=WHITE, hover_bg=BLUE_LIGHT,
+                         normal_fg=TEXT, hover_fg=BLUE):
+    """Smooth color transition for sidebar buttons."""
+    def on_enter(e):
+        button.configure(bg=hover_bg, fg=hover_fg)
+
+    def on_leave(e):
+        # Only revert if this button is not the active page
+        if nav_buttons.get(button._name, {}).get("button") != button:
+            return
+        current = nav_buttons.get(button._name, {})
+        # Check active state via indicator color
+        if current.get("indicator") and current["indicator"].cget("bg") == BLUE:
+            return  # it's active, keep highlighted
+        button.configure(bg=normal_bg, fg=normal_fg)
+
+    button.bind("<Enter>", on_enter, add="+")
+    button.bind("<Leave>", on_leave, add="+")
+
+
+# ============================================================
+# 1. LOAD DATASET
+# ============================================================
+
+try:
+    df = pd.read_csv(CSV_FILE)
+except FileNotFoundError:
+    raise SystemExit(
+        "startup_funding.csv was not found.\n"
+        "Keep startup_funding.csv in the same folder as this Python file."
+    )
+
+
+# ============================================================
+# 2. DATA CLEANING
+# ============================================================
+
+df.columns = df.columns.str.strip()
+
+rename_map = {}
+for col in df.columns:
+    clean = col.strip().lower()
+    if clean in ["date dd/mm/yyyy", "date"]:
+        rename_map[col] = "Date"
+    elif clean in ["city  location", "city location", "city"]:
+        rename_map[col] = "City"
+    elif clean in ["investmentntype", "investment type"]:
+        rename_map[col] = "Investment Type"
+    elif clean in ["amount in usd", "amount usd"]:
+        rename_map[col] = "Amount USD"
+
+df = df.rename(columns=rename_map)
+
+duplicate_count = int(df.duplicated().sum())
+df = df.drop_duplicates()
+
+if "Date" in df.columns:
+    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    df["Year"] = df["Date"].dt.year
+else:
+    df["Year"] = np.nan
+
+text_columns = ["Startup Name", "Industry Vertical", "SubVertical",
+                "City", "Investors Name", "Investment Type"]
+
+def clean_text(series):
+    series = series.fillna("Unknown").astype(str)
+    series = series.str.replace("\xa0", " ", regex=False)
+    series = series.str.replace(r"\s+", " ", regex=True).str.strip()
+    return series.replace({"": "Unknown", "nan": "Unknown", "None": "Unknown"})
+
+for col in text_columns:
+    if col in df.columns:
+        df[col] = clean_text(df[col])
+
+if "Amount USD" in df.columns:
+    df["Amount USD"] = (df["Amount USD"].astype("string")
+                        .str.replace(r"[^0-9.]", "", regex=True))
+    df["Amount USD"] = pd.to_numeric(df["Amount USD"], errors="coerce")
+else:
+    df["Amount USD"] = np.nan
+
+df.to_csv("startup_funding_cleaned.csv", index=False)
+
+
+# ============================================================
+# 3. ANALYSIS
+# ============================================================
+
+valid_amounts = df["Amount USD"].dropna()
+
+total_records = len(df)
+total_industries = df["Industry Vertical"].replace("Unknown", np.nan).nunique()
+
+total_funding = np.sum(valid_amounts) if len(valid_amounts) else 0
+average_funding = np.mean(valid_amounts) if len(valid_amounts) else 0
+median_funding = np.median(valid_amounts) if len(valid_amounts) else 0
+maximum_funding = np.max(valid_amounts) if len(valid_amounts) else 0
+minimum_funding = np.min(valid_amounts) if len(valid_amounts) else 0
+std_funding = np.std(valid_amounts) if len(valid_amounts) else 0
+
+industry_count = df["Industry Vertical"].value_counts()
+investment_count = df["Investment Type"].value_counts()
+industry_funding = df.groupby("Industry Vertical")["Amount USD"].sum().sort_values(ascending=False)
+yearly_funding = df.dropna(subset=["Year"]).groupby("Year")["Amount USD"].sum().sort_index()
+city_count = df[df["City"] != "Unknown"]["City"].value_counts().sort_values(ascending=False)
+startup_funding = df.groupby("Startup Name")["Amount USD"].sum().sort_values(ascending=False)
+
+top_industries = industry_funding.head(8)
+top_cities = city_count.head(5)
+top_startups = startup_funding.head(5)
+
+bins = [0, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000, np.inf]
+labels = ["0-1M", "1-5M", "5-10M", "10-50M", "50-100M", "100M+"]
+funding_ranges = pd.cut(valid_amounts, bins=bins, labels=labels, include_lowest=True).value_counts().sort_index()
+
+
+# ============================================================
+# 4. BEAUTIFUL SOUP
+# ============================================================
+
+html_demo = """<html><head><title>Startup Funding</title></head>
+<body><h1>Indian Startup Funding</h1></body></html>"""
+soup = BeautifulSoup(html_demo, "html.parser")
+
+
+# ============================================================
+# 5. HELPERS
+# ============================================================
+
+def money_short(value):
+    if pd.isna(value):
+        return "N/A"
+    value = float(value)
+    if abs(value) >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f} B"
+    if abs(value) >= 1_000_000:
+        return f"${value / 1_000_000:.2f} M"
+    if abs(value) >= 1_000:
+        return f"${value / 1_000:.1f} K"
+    return f"${value:,.0f}"
+
+
+def clear_frame(frame):
+    for widget in frame.winfo_children():
+        widget.destroy()
+
+
+def add_kpi_card(parent, title, value, subtitle, accent, icon):
+    """KPI card with smooth uplift animation on hover."""
+    card = tk.Frame(parent, bg=WHITE, highlightbackground=BORDER,
+                    highlightthickness=1, cursor="hand2")
+    card.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+    tk.Frame(card, bg=accent, height=5).pack(fill="x")
+
+    icon_frame = tk.Frame(card, bg=WHITE)
+    icon_frame.pack(anchor="w", padx=25, pady=(20, 5))
+    tk.Label(icon_frame, text=icon, font=("Segoe UI", 28),
+             fg=accent, bg=WHITE).pack()
+
+    tk.Label(card, text=value, font=("Segoe UI", 26, "bold"),
+             fg=TEXT, bg=WHITE).pack(anchor="w", padx=25, pady=(5, 0))
+    tk.Label(card, text=title, font=("Segoe UI", 12, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=25, pady=(5, 0))
+    tk.Label(card, text=subtitle, font=("Segoe UI", 10),
+             fg=MUTED, bg=WHITE).pack(anchor="w", padx=25, pady=(2, 20))
+
+    # ---- Uplift animation ----
+    add_smooth_lift(card, normal_border=BORDER, hover_border=accent,
+                    normal_thickness=1, hover_thickness=2,
+                    normal_bg=WHITE, hover_bg=HOVER_LIGHT)
+
+    return card
+
+
+def chart_box(parent, title):
+    """Chart container with uplift animation on hover."""
+    box = tk.Frame(parent, bg=WHITE, highlightbackground=BORDER,
+                   highlightthickness=1, cursor="hand2")
+    box.pack_propagate(False)
+    tk.Label(box, text=title, font=("Segoe UI", 15, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=25, pady=(20, 5))
+
+    # ---- Uplift animation ----
+    add_smooth_lift(box, normal_border=BORDER, hover_border=BLUE,
+                    normal_thickness=1, hover_thickness=2,
+                    normal_bg=WHITE, hover_bg=HOVER_LIGHT)
+    return box
+
+
+def embed_figure(box, fig):
+    canvas = FigureCanvasTkAgg(fig, master=box)
+    canvas.draw()
+    widget = canvas.get_tk_widget()
+    widget.pack(fill="both", expand=True, padx=15, pady=(5, 15))
+    plt.close(fig)
+
+
+def style_axes(ax):
+    ax.tick_params(axis="both", labelsize=10, colors=MUTED)
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+# ============================================================
+# 6. CHARTS
+# ============================================================
+
+def make_industry_chart(parent):
+    box = chart_box(parent, "Funding by Industry Vertical")
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), dpi=100, facecolor=WHITE)
+    
+    data = top_industries.sort_values()
+    colors = [BLUE] * len(data)
+    colors[-1] = TEAL
+    
+    ax.barh(data.index, data.values / 1_000_000, color=colors, height=0.6)
+    ax.set_xlabel("Funding (USD Million)", fontsize=11, color=MUTED)
+    ax.tick_params(axis="y", labelsize=10, colors=TEXT)
+    
+    style_axes(ax)
+    fig.subplots_adjust(left=0.32, right=0.96, top=0.96, bottom=0.14)
+    embed_figure(box, fig)
+    return box
+
+
+def make_year_chart(parent):
+    box = chart_box(parent, "Funding Trend by Year")
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), dpi=100, facecolor=WHITE)
+    
+    if len(yearly_funding):
+        ax.plot(yearly_funding.index, yearly_funding.values / 1_000_000_000,
+                marker="o", markersize=9, linewidth=3, color=TEAL)
+        ax.fill_between(yearly_funding.index, yearly_funding.values / 1_000_000_000,
+                        alpha=0.15, color=TEAL)
+    
+    ax.set_xlabel("Year", fontsize=11, color=MUTED)
+    ax.set_ylabel("Funding (USD Billion)", fontsize=11, color=MUTED)
+    ax.tick_params(axis="x", labelsize=10, colors=TEXT)
+    
+    style_axes(ax)
+    fig.subplots_adjust(left=0.13, right=0.96, top=0.96, bottom=0.14)
+    embed_figure(box, fig)
+    return box
+
+
+def make_investment_pie(parent):
+    box = chart_box(parent, "Investment Type Distribution")
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), dpi=100, facecolor=WHITE)
+    
+    data = investment_count.head(5).copy()
+    others = investment_count.iloc[5:].sum()
+    if others > 0:
+        data.loc["Others"] = others
+    
+    pie_colours = [BLUE, TEAL, AMBER, PURPLE, PINK, "#94A3B8"]
+    
+    if len(data):
+        wedges, texts, autotexts = ax.pie(
+            data.values, autopct="%1.0f%%", startangle=90,
+            colors=pie_colours[:len(data)],
+            textprops={"fontsize": 11, "color": WHITE, "weight": "bold"},
+            pctdistance=0.78
+        )
+        centre_circle = plt.Circle((0, 0), 0.55, fc=WHITE)
+        fig.gca().add_artist(centre_circle)
+        
+        ax.legend(wedges, data.index, title="Investment Types",
+                  loc="center left", bbox_to_anchor=(1, 0, 0.5, 1),
+                  fontsize=10, title_fontsize=11, frameon=False)
+    
+    ax.axis("equal")
+    fig.subplots_adjust(left=0.02, right=0.58, top=0.96, bottom=0.04)
+    embed_figure(box, fig)
+    return box
+
+
+def make_range_chart(parent):
+    box = chart_box(parent, "Funding Amount Distribution")
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), dpi=100, facecolor=WHITE)
+    
+    bars = ax.bar(funding_ranges.index.astype(str), funding_ranges.values,
+                  color=PURPLE, width=0.6)
+    
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height,
+                f'{int(height)}', ha='center', va='bottom',
+                fontsize=9, color=TEXT, fontweight="bold")
+    
+    ax.set_xlabel("Funding Range (USD)", fontsize=11, color=MUTED)
+    ax.set_ylabel("Number of Records", fontsize=11, color=MUTED)
+    ax.tick_params(axis="x", labelsize=10, rotation=0, colors=TEXT)
+    
+    style_axes(ax)
+    fig.subplots_adjust(left=0.13, right=0.96, top=0.96, bottom=0.16)
+    embed_figure(box, fig)
+    return box
+
+
+def make_boxplot(parent):
+    box = chart_box(parent, "Funding Amount by Investment Type - Box Plot")
+    fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100, facecolor=WHITE)
+    
+    selected_types = investment_count.head(5).index
+    plot_df = df[df["Investment Type"].isin(selected_types)][["Investment Type", "Amount USD"]].dropna()
+    
+    if len(plot_df):
+        sns.boxplot(data=plot_df, x="Investment Type", y="Amount USD",
+                    hue="Investment Type",
+                    palette=[BLUE, TEAL, AMBER, PURPLE, PINK],
+                    legend=False, ax=ax, width=0.5, linewidth=1.5)
+        ax.set_yscale("log")
+    
+    ax.set_xlabel("", fontsize=11)
+    ax.set_ylabel("Amount (USD) - Log Scale", fontsize=11, color=MUTED)
+    ax.tick_params(axis="x", labelsize=10, colors=TEXT)
+    
+    style_axes(ax)
+    fig.subplots_adjust(left=0.08, right=0.97, top=0.96, bottom=0.15)
+    embed_figure(box, fig)
+    return box
+
+
+# ============================================================
+# 7. MAIN WINDOW
+# ============================================================
+
+root = tk.Tk()
+root.title("Indian Startup Funding - Data Analysis Dashboard")
+root.geometry("1500x950")
+root.minsize(1250, 750)
+root.configure(bg=BG)
+
+
+# ==================== LARGE TABLE STYLES ====================
+style = ttk.Style()
+style.theme_use("default")
+
+style.configure("Large.Treeview",
+                background=WHITE,
+                foreground=TEXT,
+                rowheight=42,
+                fieldbackground=WHITE,
+                font=("Segoe UI", 12),
+                borderwidth=0)
+
+style.configure("Large.Treeview.Heading",
+                background=BLUE_LIGHT,
+                foreground=BLUE_DARK,
+                font=("Segoe UI", 13, "bold"),
+                relief="flat",
+                padding=(10, 12))
+
+style.map("Large.Treeview",
+          background=[("selected", BLUE_LIGHT)],
+          foreground=[("selected", BLUE_DARK)])
+
+style.map("Large.Treeview.Heading",
+          background=[("active", BLUE_LIGHT)])
+
+
+# ============================================================
+# 8. SIDEBAR
+# ============================================================
+
+sidebar = tk.Frame(root, bg=WHITE, width=260)
+sidebar.pack(side="left", fill="y")
+sidebar.pack_propagate(False)
+
+brand_frame = tk.Frame(sidebar, bg=WHITE)
+brand_frame.pack(fill="x", padx=25, pady=(35, 0))
+
+tk.Frame(brand_frame, bg=BLUE, height=4, width=40).pack(anchor="w", pady=(0, 15))
+
+tk.Label(brand_frame, text="Indian Startup", font=("Segoe UI", 20, "bold"),
+         fg=NAVY, bg=WHITE).pack(anchor="w")
+tk.Label(brand_frame, text="Funding", font=("Segoe UI", 20, "bold"),
+         fg=BLUE, bg=WHITE).pack(anchor="w")
+tk.Label(brand_frame, text="Data Analysis Dashboard", font=("Segoe UI", 10),
+         fg=MUTED, bg=WHITE).pack(anchor="w", pady=(8, 0))
+
+nav_frame = tk.Frame(sidebar, bg=WHITE)
+nav_frame.pack(fill="x", pady=(35, 0))
+
+nav_buttons = {}
+
+def set_active(name):
+    for btn_name, widgets in nav_buttons.items():
+        if btn_name == name:
+            widgets["button"].configure(bg=BLUE_LIGHT, fg=BLUE)
+            widgets["indicator"].configure(bg=BLUE)
+        else:
+            widgets["button"].configure(bg=WHITE, fg=TEXT)
+            widgets["indicator"].configure(bg=WHITE)
+
+
+def create_nav_button(name, label, command):
+    row = tk.Frame(nav_frame, bg=WHITE, height=50)
+    row.pack(fill="x", padx=15, pady=4)
+    row.pack_propagate(False)
+    
+    indicator = tk.Frame(row, bg=WHITE, width=4)
+    indicator.pack(side="left", fill="y")
+    
+    button = tk.Button(row, text=f"   {label}", command=command,
+                       font=("Segoe UI", 12), fg=TEXT, bg=WHITE,
+                       activebackground=BLUE_LIGHT, activeforeground=BLUE,
+                       relief="flat", bd=0, anchor="w", padx=15, cursor="hand2")
+    button.pack(side="left", fill="both", expand=True)
+
+    # ---- Uplift / hover animation for sidebar buttons ----
+    button._name = name
+
+    def on_enter(e):
+        # Only animate if not active
+        if indicator.cget("bg") != BLUE:
+            button.configure(bg=BLUE_LIGHT, fg=BLUE)
+
+    def on_leave(e):
+        # Revert only if not the active page
+        if indicator.cget("bg") != BLUE:
+            button.configure(bg=WHITE, fg=TEXT)
+
+    button.bind("<Enter>", on_enter, add="+")
+    button.bind("<Leave>", on_leave, add="+")
+
+    nav_buttons[name] = {"button": button, "indicator": indicator}
+
+
+# ============================================================
+# 9. MAIN CONTENT AREA
+# ============================================================
+
+main_area = tk.Frame(root, bg=BG)
+main_area.pack(side="right", fill="both", expand=True)
+
+content_canvas = tk.Canvas(main_area, bg=BG, highlightthickness=0)
+scrollbar = ttk.Scrollbar(main_area, orient="vertical", command=content_canvas.yview)
+
+content = tk.Frame(content_canvas, bg=PAGE_BG)
+content_window = content_canvas.create_window((0, 0), window=content, anchor="nw")
+
+def update_scroll_region(event=None):
+    content_canvas.configure(scrollregion=content_canvas.bbox("all"))
+
+def resize_content(event):
+    content_canvas.itemconfig(content_window, width=event.width)
+
+content.bind("<Configure>", update_scroll_region)
+content_canvas.bind("<Configure>", resize_content)
+content_canvas.configure(yscrollcommand=scrollbar.set)
+
+content_canvas.pack(side="left", fill="both", expand=True, padx=(25, 0), pady=25)
+scrollbar.pack(side="right", fill="y", pady=25, padx=(0, 8))
+
+def mousewheel(event):
+    content_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+content_canvas.bind_all("<MouseWheel>", mousewheel)
+
+
+# ============================================================
+# 10. OVERVIEW PAGE
+# ============================================================
+
+def show_overview():
+    set_active("Overview")
+    clear_frame(content)
+    content_canvas.yview_moveto(0)
+    content.configure(bg=PAGE_BG)
+
+    header = tk.Frame(content, bg=PAGE_BG)
+    header.pack(fill="x", padx=10, pady=(10, 25))
+
+    tk.Label(header, text="Dashboard Overview", font=("Segoe UI", 16),
+             fg=BLUE, bg=PAGE_BG).pack(anchor="w")
+    tk.Label(header, text="Indian Startup Funding Analysis", font=("Segoe UI", 32, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", pady=(5, 0))
+    tk.Label(header, text="Explore funding patterns, top industries, investment types and startup trends.",
+             font=("Segoe UI", 13), fg=MUTED, bg=PAGE_BG).pack(anchor="w", pady=(8, 0))
+
+    cards = tk.Frame(content, bg=PAGE_BG)
+    cards.pack(fill="x", padx=10, pady=(0, 25))
+
+    add_kpi_card(cards, "Total Records", f"{total_records:,}", "records in dataset", BLUE, "📊")
+    add_kpi_card(cards, "Total Funding", money_short(total_funding), "available funding values", TEAL, "💰")
+    add_kpi_card(cards, "Average Funding", money_short(average_funding), "per available record", PURPLE, "📈")
+    add_kpi_card(cards, "Highest Funding", money_short(maximum_funding), "single recorded deal", PINK, "🏆")
+
+    row1 = tk.Frame(content, bg=PAGE_BG, height=430)
+    row1.pack(fill="x", padx=10, pady=(0, 20))
+    row1.pack_propagate(False)
+
+    make_industry_chart(row1).pack(side="left", fill="both", expand=True, padx=(0, 10))
+    make_year_chart(row1).pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+    row2 = tk.Frame(content, bg=PAGE_BG, height=430)
+    row2.pack(fill="x", padx=10, pady=(0, 25))
+    row2.pack_propagate(False)
+
+    make_investment_pie(row2).pack(side="left", fill="both", expand=True, padx=(0, 10))
+    make_range_chart(row2).pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+    show_key_insights(content)
+
+
+def show_key_insights(parent):
+    top_industry = top_industries.index[0] if len(top_industries) else "N/A"
+    highest_year = int(yearly_funding.idxmax()) if len(yearly_funding) else "N/A"
+    top_investment = investment_count.index[0] if len(investment_count) else "N/A"
+    top_startup = top_startups.index[0] if len(top_startups) else "N/A"
+    top_city = top_cities.index[0] if len(top_cities) else "N/A"
+    median_val = money_short(median_funding)
+
+    insight = tk.Frame(parent, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    insight.pack(fill="x", padx=10, pady=(0, 30))
+
+    tk.Label(insight, text="Key Insights", font=("Segoe UI", 20, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 20))
+
+    items = [
+        ("01", "Highest-Funded Industry", str(top_industry), BLUE),
+        ("02", "Highest Funding Year", str(highest_year), TEAL),
+        ("03", "Most Common Investment Type", str(top_investment), PURPLE),
+        ("04", "Top Startup by Funding", str(top_startup), PINK),
+        ("05", "City with Most Records", str(top_city), ORANGE),
+        ("06", "Median Funding Amount", median_val, BLUE),
+    ]
+
+    grid_frame = tk.Frame(insight, bg=WHITE)
+    grid_frame.pack(fill="x", padx=20, pady=(0, 25))
+
+    for i, (num, title, value, accent) in enumerate(items):
+        row = i // 3
+        col = i % 3
+        
+        cell = tk.Frame(grid_frame, bg=WHITE, highlightbackground=BORDER,
+                        highlightthickness=1, cursor="hand2")
+        cell.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+        grid_frame.grid_columnconfigure(col, weight=1)
+        grid_frame.grid_rowconfigure(row, weight=1)
+
+        tk.Frame(cell, bg=accent, height=4).pack(fill="x")
+
+        inner = tk.Frame(cell, bg=WHITE)
+        inner.pack(fill="both", expand=True, padx=20, pady=18)
+
+        tk.Label(inner, text=num, font=("Segoe UI", 12, "bold"),
+                 fg=accent, bg=WHITE).pack(anchor="w")
+        tk.Label(inner, text=title, font=("Segoe UI", 11),
+                 fg=MUTED, bg=WHITE, wraplength=200, justify="left").pack(anchor="w", pady=(8, 5))
+        tk.Label(inner, text=value, font=("Segoe UI", 16, "bold"),
+                 fg=TEXT, bg=WHITE, wraplength=220, justify="left").pack(anchor="w")
+
+        # ---- Uplift animation for each insight cell ----
+        add_smooth_lift(cell, normal_border=BORDER, hover_border=accent,
+                        normal_thickness=1, hover_thickness=2,
+                        normal_bg=WHITE, hover_bg=HOVER_LIGHT)
+
+
+# ============================================================
+# 11. DATA EXPLORATION PAGE
+# ============================================================
+
+def show_exploration():
+    set_active("Data Exploration")
+    clear_frame(content)
+    content_canvas.yview_moveto(0)
+    content.configure(bg=PAGE_BG)
+
+    tk.Label(content, text="Data Exploration", font=("Segoe UI", 32, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 5))
+    tk.Label(content, text="Examine the structure, quality and content of the dataset.",
+             font=("Segoe UI", 13), fg=MUTED, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(0, 25))
+
+    summary = tk.Frame(content, bg=PAGE_BG)
+    summary.pack(fill="x", padx=15, pady=(0, 25))
+
+    for label, val, color in [
+        ("Total Rows", f"{df.shape[0]:,}", BLUE),
+        ("Total Columns", f"{df.shape[1]:,}", TEAL),
+        ("Duplicates Removed", f"{duplicate_count}", ORANGE),
+        ("Missing Values", f"{int(df.isnull().sum().sum()):,}", PINK),
+    ]:
+        card = tk.Frame(summary, bg=WHITE, highlightbackground=BORDER,
+                        highlightthickness=1, cursor="hand2")
+        card.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        tk.Frame(card, bg=color, height=4).pack(fill="x")
+        tk.Label(card, text=val, font=("Segoe UI", 22, "bold"), fg=TEXT, bg=WHITE).pack(pady=(18, 2))
+        tk.Label(card, text=label, font=("Segoe UI", 11), fg=MUTED, bg=WHITE).pack(pady=(0, 18))
+
+        # ---- Uplift animation ----
+        add_smooth_lift(card, normal_border=BORDER, hover_border=color,
+                        normal_thickness=1, hover_thickness=2,
+                        normal_bg=WHITE, hover_bg=HOVER_LIGHT)
+
+    # Column Names
+    tk.Label(content, text="Column Names", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 12))
+    
+    col_box = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    col_box.pack(fill="x", padx=15, pady=(0, 25))
+    
+    cols_container = tk.Frame(col_box, bg=WHITE)
+    cols_container.pack(fill="x", padx=20, pady=20)
+    
+    total_cols = len(df.columns)
+    num_cols_per_row = (total_cols + 1) // 2
+    
+    for i, col in enumerate(df.columns):
+        row = i // num_cols_per_row
+        col_idx = i % num_cols_per_row
+        
+        chip = tk.Label(cols_container, text=col, font=("Segoe UI", 12, "bold"),
+                        fg=BLUE_DARK, bg=BLUE_LIGHT, padx=15, pady=10,
+                        cursor="hand2")
+        chip.grid(row=row, column=col_idx, padx=6, pady=6, sticky="nsew")
+        cols_container.grid_columnconfigure(col_idx, weight=1)
+
+        # ---- Hover animation for chips ----
+        def chip_enter(e, c=chip):
+            c.configure(bg=BLUE, fg=WHITE)
+        def chip_leave(e, c=chip):
+            c.configure(bg=BLUE_LIGHT, fg=BLUE_DARK)
+        chip.bind("<Enter>", chip_enter, add="+")
+        chip.bind("<Leave>", chip_leave, add="+")
+    
+    # DATA PREVIEW
+    tk.Label(content, text="Data Preview (First 5 Records)", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 12))
+    
+    preview_frame = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    preview_frame.pack(fill="x", padx=15, pady=(0, 25))
+
+    cols = list(df.columns)
+    preview_tree = ttk.Treeview(preview_frame, columns=cols, show="headings", 
+                                 height=6, style="Large.Treeview")
+    for col in cols:
+        preview_tree.heading(col, text=col)
+        preview_tree.column(col, width=130, anchor="w")
+    
+    for _, row in df.head(5).iterrows():
+        preview_tree.insert("", "end", values=list(row))
+    
+    preview_tree.pack(fill="x", padx=15, pady=15)
+
+    # MISSING VALUES
+    tk.Label(content, text="Missing Values Report", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 12))
+    
+    table_frame = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    table_frame.pack(fill="x", padx=15, pady=(0, 30))
+
+    tree = ttk.Treeview(table_frame, columns=("Column", "Missing", "Status"),
+                        show="headings", height=8, style="Large.Treeview")
+    tree.heading("Column", text="Column")
+    tree.heading("Missing", text="Missing Values")
+    tree.heading("Status", text="Status")
+    tree.column("Column", width=400, anchor="w")
+    tree.column("Missing", width=250, anchor="center")
+    tree.column("Status", width=250, anchor="center")
+
+    for column, count in df.isnull().sum().sort_values(ascending=False).items():
+        status = "✓ Complete" if count == 0 else "⚠ Incomplete"
+        tree.insert("", "end", values=(column, int(count), status))
+
+    tree.pack(fill="x", padx=15, pady=15)
+
+
+# ============================================================
+# 12. ANALYSIS PAGE
+# ============================================================
+
+def show_analysis():
+    set_active("Analysis")
+    clear_frame(content)
+    content_canvas.yview_moveto(0)
+    content.configure(bg=PAGE_BG)
+
+    tk.Label(content, text="Data Analysis", font=("Segoe UI", 32, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 5))
+    tk.Label(content, text="Meaningful statistical analysis using NumPy and Pandas.",
+             font=("Segoe UI", 13), fg=MUTED, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(0, 25))
+
+    box1 = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    box1.pack(fill="x", padx=15, pady=(0, 20))
+
+    tk.Label(box1, text="Numerical Analysis", font=("Segoe UI", 18, "bold"),
+             fg=PURPLE, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    num_data = [
+        ("Average Funding", money_short(average_funding), "np.mean()"),
+        ("Median Funding", money_short(median_funding), "np.median()"),
+        ("Maximum Funding", money_short(maximum_funding), "np.max()"),
+        ("Minimum Funding", money_short(minimum_funding), "np.min()"),
+        ("Total Funding", money_short(total_funding), "np.sum()"),
+        ("Standard Deviation", money_short(std_funding), "np.std()"),
+        ("Available Records", f"{len(valid_amounts):,}", "count()"),
+        ("Number of Industries", f"{total_industries}", "nunique()"),
+    ]
+
+    num_tree = ttk.Treeview(box1, columns=("Analysis", "Result", "Method"),
+                            show="headings", height=8, style="Large.Treeview")
+    num_tree.heading("Analysis", text="Analysis")
+    num_tree.heading("Result", text="Result")
+    num_tree.heading("Method", text="Method Used")
+    num_tree.column("Analysis", width=400, anchor="w")
+    num_tree.column("Result", width=400, anchor="w")
+    num_tree.column("Method", width=250, anchor="center")
+
+    for item in num_data:
+        num_tree.insert("", "end", values=item)
+    
+    num_tree.pack(fill="x", padx=30, pady=(0, 25))
+
+    box2 = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    box2.pack(fill="x", padx=15, pady=(0, 20))
+
+    tk.Label(box2, text="Categorical Analysis", font=("Segoe UI", 18, "bold"),
+             fg=TEAL, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    cat_data = [
+        ("Highest-Funded Industry", top_industries.index[0] if len(top_industries) else "N/A", "groupby() + sum()"),
+        ("Most Common Investment Type", investment_count.index[0] if len(investment_count) else "N/A", "value_counts()"),
+        ("City with Most Records", city_count.index[0] if len(city_count) else "N/A", "value_counts()"),
+        ("Top Startup by Funding", startup_funding.index[0] if len(startup_funding) else "N/A", "groupby() + sort_values()"),
+        ("Highest Funding Year", int(yearly_funding.idxmax()) if len(yearly_funding) else "N/A", "groupby() + idxmax()"),
+    ]
+
+    cat_tree = ttk.Treeview(box2, columns=("Category", "Result", "Method"),
+                            show="headings", height=5, style="Large.Treeview")
+    cat_tree.heading("Category", text="Category")
+    cat_tree.heading("Result", text="Result")
+    cat_tree.heading("Method", text="Method Used")
+    cat_tree.column("Category", width=400, anchor="w")
+    cat_tree.column("Result", width=400, anchor="w")
+    cat_tree.column("Method", width=250, anchor="center")
+
+    for item in cat_data:
+        cat_tree.insert("", "end", values=item)
+    
+    cat_tree.pack(fill="x", padx=30, pady=(0, 25))
+
+    box3 = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    box3.pack(fill="x", padx=15, pady=(0, 30))
+
+    tk.Label(box3, text="Methods & Functions Used", font=("Segoe UI", 18, "bold"),
+             fg=BLUE, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    methods = [
+        "mean()", "median()", "max()", "min()", "sum()", "count()",
+        "std()", "value_counts()", "groupby()", "sort_values()",
+        "nunique()", "np.sum()", "np.mean()", "np.median()", "np.max()", "np.min()"
+    ]
+
+    method_frame = tk.Frame(box3, bg=WHITE)
+    method_frame.pack(fill="x", padx=30, pady=(0, 25))
+
+    total_methods = len(methods)
+    num_per_row = (total_methods + 1) // 2
+
+    for i, m in enumerate(methods):
+        row = i // num_per_row
+        col_idx = i % num_per_row
+        
+        chip = tk.Label(method_frame, text=m, font=("Segoe UI", 12, "bold"),
+                        fg=BLUE_DARK, bg=BLUE_LIGHT, padx=15, pady=12,
+                        cursor="hand2")
+        chip.grid(row=row, column=col_idx, padx=6, pady=6, sticky="nsew")
+        method_frame.grid_columnconfigure(col_idx, weight=1)
+
+        # ---- Hover animation for method chips ----
+        def m_enter(e, c=chip):
+            c.configure(bg=BLUE, fg=WHITE)
+        def m_leave(e, c=chip):
+            c.configure(bg=BLUE_LIGHT, fg=BLUE_DARK)
+        chip.bind("<Enter>", m_enter, add="+")
+        chip.bind("<Leave>", m_leave, add="+")
+
+
+# ============================================================
+# 13. VISUALISATIONS PAGE
+# ============================================================
+
+def show_visualisations():
+    set_active("Visualisations")
+    clear_frame(content)
+    content_canvas.yview_moveto(0)
+    content.configure(bg=PAGE_BG)
+
+    tk.Label(content, text="Visualisations", font=("Segoe UI", 32, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 5))
+    tk.Label(content, text="Five meaningful visualisations using Matplotlib and Seaborn.",
+             font=("Segoe UI", 13), fg=MUTED, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(0, 25))
+
+    row1 = tk.Frame(content, bg=PAGE_BG, height=430)
+    row1.pack(fill="x", padx=10, pady=(0, 20))
+    row1.pack_propagate(False)
+    make_industry_chart(row1).pack(side="left", fill="both", expand=True, padx=(0, 10))
+    make_year_chart(row1).pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+    row2 = tk.Frame(content, bg=PAGE_BG, height=430)
+    row2.pack(fill="x", padx=10, pady=(0, 20))
+    row2.pack_propagate(False)
+    make_investment_pie(row2).pack(side="left", fill="both", expand=True, padx=(0, 10))
+    make_range_chart(row2).pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+    row3 = tk.Frame(content, bg=PAGE_BG)
+    row3.pack(fill="x", padx=10, pady=(0, 30))
+    make_boxplot(row3)
+
+
+# ============================================================
+# 14. ABOUT PAGE
+# ============================================================
+
+def show_about():
+    set_active("About")
+    clear_frame(content)
+    content_canvas.yview_moveto(0)
+    content.configure(bg=PAGE_BG)
+
+    tk.Label(content, text="About the Project", font=("Segoe UI", 32, "bold"),
+             fg=NAVY, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(10, 5))
+    tk.Label(content, text="Indian Startup Funding - Data Analysis Dashboard",
+             font=("Segoe UI", 14, "bold"), fg=BLUE, bg=PAGE_BG).pack(anchor="w", padx=15, pady=(0, 25))
+
+    obj_card = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    obj_card.pack(fill="x", padx=15, pady=(0, 20))
+    tk.Frame(obj_card, bg=BLUE, height=5).pack(fill="x")
+
+    tk.Label(obj_card, text="🎯  Objective", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 10))
+    tk.Label(obj_card,
+             text="To develop a complete Data Science project that loads, cleans, analyses "
+                  "and visualises a real-world Indian startup funding dataset using Python, "
+                  "and presents the findings through an interactive Tkinter dashboard.",
+             font=("Segoe UI", 13), fg=TEXT, bg=WHITE,
+             wraplength=1100, justify="left").pack(anchor="w", padx=30, pady=(0, 25))
+
+    tools_card = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    tools_card.pack(fill="x", padx=15, pady=(0, 20))
+    tk.Frame(tools_card, bg=TEAL, height=5).pack(fill="x")
+
+    tk.Label(tools_card, text="🛠  Dataset & Tools", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    tools_data = [
+        ("startup_funding.csv", "Real-world Indian startup funding dataset", TEAL),
+        ("NumPy", "Numerical calculations and statistical operations", BLUE),
+        ("Pandas", "Data loading, cleaning, filtering and analysis", PURPLE),
+        ("Matplotlib", "Creating static visualisations and charts", PINK),
+        ("Seaborn", "Statistical visualisation (box plots, distributions)", ORANGE),
+        ("BeautifulSoup", "HTML parsing demonstration (as required by practical)", AMBER),
+        ("Tkinter", "Building the interactive GUI dashboard", BLUE_DARK),
+    ]
+
+    tools_frame = tk.Frame(tools_card, bg=WHITE)
+    tools_frame.pack(fill="x", padx=25, pady=(0, 25))
+
+    for i, (name, purpose, color) in enumerate(tools_data):
+        row = tk.Frame(tools_frame, bg=WHITE)
+        row.pack(fill="x", pady=4)
+
+        tk.Label(row, text=name, font=("Segoe UI", 12, "bold"),
+                 fg=WHITE, bg=color, width=20, anchor="w",
+                 padx=12, pady=8).pack(side="left")
+        tk.Label(row, text=purpose, font=("Segoe UI", 12),
+                 fg=TEXT, bg=WHITE, anchor="w").pack(side="left", padx=15)
+
+    out_card = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    out_card.pack(fill="x", padx=15, pady=(0, 20))
+    tk.Frame(out_card, bg=PURPLE, height=5).pack(fill="x")
+
+    tk.Label(out_card, text="📦  Project Output", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    output_frame = tk.Frame(out_card, bg=WHITE)
+    output_frame.pack(fill="x", padx=25, pady=(0, 25))
+
+    outputs = [
+        ("📄  startup_funding_dashboard.py", "Main Python dashboard file"),
+        ("📊  startup_funding.csv", "Original dataset"),
+        ("✅  startup_funding_cleaned.csv", "Cleaned dataset (auto-generated)"),
+        ("🖥  Interactive Dashboard", "This application with 5 pages"),
+    ]
+
+    for icon_name, desc in outputs:
+        row = tk.Frame(output_frame, bg=PURPLE_LIGHT, padx=15, pady=12, cursor="hand2")
+        row.pack(fill="x", pady=4)
+        tk.Label(row, text=icon_name, font=("Segoe UI", 12, "bold"),
+                 fg=PURPLE, bg=PURPLE_LIGHT, anchor="w").pack(side="left")
+        tk.Label(row, text=desc, font=("Segoe UI", 11),
+                 fg=TEXT, bg=PURPLE_LIGHT, anchor="w").pack(side="left", padx=20)
+
+    req_card = tk.Frame(content, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+    req_card.pack(fill="x", padx=15, pady=(0, 30))
+    tk.Frame(req_card, bg=PINK, height=5).pack(fill="x")
+
+    tk.Label(req_card, text="✅  Practical Requirements Covered", font=("Segoe UI", 18, "bold"),
+             fg=NAVY, bg=WHITE).pack(anchor="w", padx=30, pady=(25, 15))
+
+    reqs = [
+        "Part A — Real-world CSV dataset with 3000+ records ✓",
+        "Part B — Data loading and exploration (shape, columns, preview) ✓",
+        "Part C — Data cleaning (duplicates, missing values, types) ✓",
+        "Part D — 8+ analysis operations using NumPy and Pandas ✓",
+        "Part E — 5 meaningful visualisations with Matplotlib and Seaborn ✓",
+        "Part F — BeautifulSoup library demonstrated ✓",
+        "Part G — Interactive Tkinter dashboard with summary and insights ✓",
+    ]
+
+    req_frame = tk.Frame(req_card, bg=WHITE)
+    req_frame.pack(fill="x", padx=30, pady=(0, 25))
+
+    for req in reqs:
+        tk.Label(req_frame, text=req, font=("Segoe UI", 12),
+                 fg=TEXT, bg=WHITE, anchor="w").pack(fill="x", pady=4)
+
+
+# ============================================================
+# 15. NAVIGATION
+# ============================================================
+
+create_nav_button("Overview", "Overview", show_overview)
+create_nav_button("Data Exploration", "Data Exploration", show_exploration)
+create_nav_button("Analysis", "Analysis", show_analysis)
+create_nav_button("Visualisations", "Visualisations", show_visualisations)
+create_nav_button("About", "About", show_about)
+
+# Sidebar footer
+footer = tk.Frame(sidebar, bg=WHITE)
+footer.pack(side="bottom", fill="x", padx=25, pady=30)
+tk.Frame(footer, bg=PURPLE, height=3, width=30).pack(anchor="w", pady=(0, 10))
+tk.Label(footer, text="Big ideas", font=("Segoe UI", 13, "bold"),
+         fg=PURPLE, bg=WHITE).pack(anchor="w")
+tk.Label(footer, text="need funding.", font=("Segoe UI", 12),
+         fg=MUTED, bg=WHITE).pack(anchor="w")
+
+
+# ============================================================
+# 16. START
+# ============================================================
+
+show_overview()
+root.mainloop()
